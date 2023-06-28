@@ -209,6 +209,8 @@ microk8s enable metallb-frr
 ```
 You will be prompted for a IP prefix, which will be the default Adresspool for Metallb. Just input any random prefix, we wont be using it. Now Metallb should be successfully installed. Until we can use this though, we first have to set up our router correctly.
 
+⚠️ There is currently a bug in metallb which sometimes messes up the cert configuration for the webhooks metallb provides so that kubernetes can validate the custom resources. The issue is documented [here](https://github.com/metallb/metallb/issues/1597). If this applies to you, i would recommend setting `failurePolicy=Ignore` like it is suggested there in your metallb deployment. This requires modifying the microk8s addon.
+
 ## Setting up our VyOS router
 (Skip this part if you already have a BGP enabled router in your network and know how to configure it)
 
@@ -344,3 +346,52 @@ Deploy the application with
 ```bash
 kubectl apply -f nginx.yaml
 ```
+
+Now we can check if our service got an address:
+```bash
+kubectl get svc/nginx -n default
+
+NAME    TYPE           CLUSTER-IP   EXTERNAL-IP          PORT(S)        AGE
+nginx   LoadBalancer   fd98::1163   2a0e:8f02:f000:2::   80:30544/TCP   25s
+```
+If your BGP configuration is setup probably, the address under `EXTERNAL-IP `should be publicly reachable. Lets check:
+
+![](images/screenshot.png)
+
+Yay \o/ seems like its working.
+
+## Continuing from here
+We now have a working kubernetes cluster in which we can deploy our workloads. One part is however still missing: Storage. For this i would recommend to install longhorn, which provides everythin necessary for your kubernetes cluster storage-wise.
+### Troubleshooting
+If your service isnt reachable, try to narrow down the source:
+#### Is the address getting anounced to your router?
+First, check if the anuoncement is actually made from the metallb-`speaker` components. In the case of VyOS, you can check the received anouncements with
+```
+show bgp summary
+```
+The number of prefixes received should match your expectation.
+#### Is the internal frr daemon anouncing the prefixes?
+Sometimes it might be worth to check if metallb actually generated the frr configuration correctly. To do this, first check the name of the speaker pods:
+```bash
+kubectl get all -n metallb-system
+NAME                              READY   STATUS 
+pod/speaker-lrp92                 4/4     Running
+pod/controller-7bfbddb7f6-vtrrb   1/1     Running
+pod/speaker-d2g4m                 4/4     Running
+```
+Then, choose one of the speaker pods, and get a shell into the `frr` container:
+```bash
+kubectl exec --stdin --tty -n metallb-system -c frr speaker-d2g4m -- /bin/sh
+```
+Now, you can directly interact with frr by using the [`vtysh`](https://docs.frrouting.org/projects/dev-guide/en/latest/vtysh.html) command. Refer to the documentation for more information about it.
+#### Further things to check
+* Did the assignment work (can you see an `EXTERNAL-IP` for the service)?
+    * If not, check the logs of the metallb `controller` component for errors
+* Can you reach the service via ther `INTERNAL-IP`
+    * If not, the issue is probably not with metallb, but rather with the CNI or the service itself
+* Did the pods associated with the service receive an IPv6 address? (check with `kubectl describe pod/foo`)
+    * If not, the CNI is probably improperly configured
+#### 
+
+### Thanks
+Many thanks to the [reudnetz w.V.](https://reudnetz.org) for providing me with the infrastructure for this project.
