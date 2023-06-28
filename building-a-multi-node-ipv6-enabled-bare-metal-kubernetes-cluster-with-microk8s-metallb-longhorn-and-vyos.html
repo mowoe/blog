@@ -1,0 +1,535 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="HandheldFriendly" content="True" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="" />
+
+  <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+Pro:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" type="text/css" href="/theme/stylesheet/style.min.css">
+
+    <link id="dark-theme-style" rel="stylesheet" type="text/css"
+          media="(prefers-color-scheme: dark), (prefers-color-scheme: no-preference)"
+    href="/theme/stylesheet/dark-theme.min.css">
+
+    <link id="pygments-dark-theme" rel="stylesheet" type="text/css"
+              media="(prefers-color-scheme: dark), (prefers-color-scheme: no-preference)"
+          href="/theme/pygments/monokai.min.css">
+    <link id="pygments-light-theme" rel="stylesheet" type="text/css"
+              media="(prefers-color-scheme: light)"
+          href="/theme/pygments/emacs.min.css">
+
+
+
+  <link rel="stylesheet" type="text/css" href="/theme/font-awesome/css/fontawesome.css">
+  <link rel="stylesheet" type="text/css" href="/theme/font-awesome/css/brands.css">
+  <link rel="stylesheet" type="text/css" href="/theme/font-awesome/css/solid.css">
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+<meta name="author" content="mowoe" />
+<meta name="description" content="Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some noob …" />
+<meta name="keywords" content="">
+
+
+  <meta property="og:site_name" content="mowoe blog"/>
+  <meta property="og:title" content="Building a multi-node IPv6-enabled bare-metal kubernetes cluster with microk8s, metallb, longhorn and VyOS"/>
+  <meta property="og:description" content="Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some noob …"/>
+  <meta property="og:locale" content="en_US"/>
+  <meta property="og:url" content="/building-a-multi-node-ipv6-enabled-bare-metal-kubernetes-cluster-with-microk8s-metallb-longhorn-and-vyos.html"/>
+  <meta property="og:type" content="article"/>
+  <meta property="article:published_time" content="2023-06-28 12:35:00+02:00"/>
+  <meta property="article:modified_time" content=""/>
+  <meta property="article:author" content="/author/mowoe.html">
+  <meta property="article:section" content="Guides"/>
+  <meta property="og:image" content="/images/12197109.png">
+
+  <title>mowoe blog &ndash; Building a multi-node IPv6-enabled bare-metal kubernetes cluster with microk8s, metallb, longhorn and VyOS</title>
+
+
+</head>
+<body >
+
+<aside>
+  <div>
+    <a href="/">
+      <img src="/images/12197109.png" alt="mowoe" title="mowoe">
+    </a>
+
+    <h1>
+      <a href="/">mowoe</a>
+    </h1>
+
+
+
+
+    <ul class="social">
+      <li>
+        <a class="sc-twitter"
+           href="https://twitter.com/mowoecom"
+           target="_blank">
+          <i class="fa-brands fa-twitter"></i>
+        </a>
+      </li>
+      <li>
+        <a class="sc-github"
+           href="https://github.com/mowoe"
+           target="_blank">
+          <i class="fa-brands fa-github"></i>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+</aside>
+  <main>
+
+
+<article class="single">
+  <header>
+      
+    <h1 id="building-a-multi-node-ipv6-enabled-bare-metal-kubernetes-cluster-with-microk8s-metallb-longhorn-and-vyos">Building a multi-node IPv6-enabled bare-metal kubernetes cluster with microk8s, metallb, longhorn and VyOS</h1>
+    <p>
+      Posted on Wed 28 June 2023 in <a href="/category/guides.html">Guides</a>
+
+    </p>
+  </header>
+
+
+  <div>
+    <p>Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to "some noob just fooling around".</p>
+<p>I always wanted to operate a cluster myself to really understand whats going on under the hood. The usual cloud providers are very happy to provide you with one, for the small price of ~50$ for one controlplane node and no worker nodes. Obviously this is a bit too expensive to justify for a little hobby project. </p>
+<p>This was the moment i decided to try building a bare-metal cluster, as, in theory, this would be a lot cheaper as you can just use off-the-shelf hosted servers, which are a lot cheaper per compute power in comparison. One small issue though: Due to the way kubernetes provisions workloads, you wont be able to just pull up a cluster and expect everything to work right away.</p>
+<p>Some examples for things which arent as easy as they seem:</p>
+<p><strong>Networking</strong></p>
+<p>Kubernetes assigns pods and containers IP addresses like you would expect, however the old idea of "one computer gets one ip address and thats it" is far from the reality in kubernetes. Most of the time, Network Ingress is controlled via the, you guessed it, <a href="https://kubernetes.io/docs/concepts/services-networking/ingress/">Ingress</a> resource. Combined with LoadBalancers, kubernetes provides a robust way of how the outside can interact with your services. Heavily simplified it works roughly like this:</p>
+<ol>
+<li>A Deployment requests that it wants to receive outside traffic</li>
+<li>The cluster provisions a LoadBalancer, and an IP with it and directs traffic it receives there to the services</li>
+</ol>
+<p>In cloud environments like AWS and Google Cloud (EKS and GKE), the cluster actually provisions a resource in the cloud (Often also calles a loadbalancer), which you will be billed for. This means, the outside will never directly communicate with your clusters network interfaces, but rather via this little detour.</p>
+<p>Now, for bare-metal deployments, someone, or rather, something has to be the entity providing these loadbalancers, as this is not included in any core kubernetes components. Some time ago, <a href="https://metallb.universe.tf/">MetalLB</a> was created for this. MetalLB functions as the provider for LoadBalancers and basically passes out IP Adresses from different Pools and announces them either via BGP or L2 (ARP in the case of v4).</p>
+<p><strong>Storage</strong></p>
+<p>For Storage, the story is roughly the same. Kubernetes has, by design, a different approach to storage, as most applications are meant to be stateless and therefore dont need any persistent Storage. This is of course different for things like databases and so on, most of the time is generally a bad idea to deploy those in kubernetes though. There will however be occasions in which you need persistent storage which survives after a container is killed or deleted. For this, kubernetes has <a href="">PersistentVolumes</a>.</p>
+<p>In most cloud environments, the cloud provider will provision such volumes in the cloud environment itself. As we have none of that in bare-metal deployments, we need something else: <a href="">Longhorn</a> is a tool which provides persistent volume functionality by storing data on the nodes themselves. We will use longhorn to provide storage for our bare-metal cluster.</p>
+<h3>Basic ideas and concepts of the Deployment</h3>
+<p>The cluster will consist of 3 nodes (this number is abritrary, you can either use just one node, or any other number, for better high availibility performance, this number should however be odd). Each of these nodes is a virtual machine on one hypervisor (in my case proxmox, this shouldnt matter though). Additionaly we need a router speaking BGP, to which we can later anounce adresses of our cluster. In theory this router doesnt have to be controlled by you (e.g. talking directly to your ISP), but the bgp advertisements will get as small as /32 for v4 and /128 for v6, which any reasonable ISP would reject. Additionally we will establish a BGP peering between each node and the router, another fact which most ISPs will (rightfuly so) reject. This is why i chose to deploy a VyOS router along with the nodes, to which they can talk via BGP. This router will then "reanounce" the received routes via OSPF to my ISP (which in my case is me).</p>
+<h5>TL;DR Prerequisites</h5>
+<ul>
+<li>Some Machines (or VMs) acting as nodes, running ubuntu</li>
+<li>BGP-enabled router <em>or</em> an additional VM to deploy a software router like VyOS</li>
+<li>An IP prefix you own or you are allowed to anounce (i will only use v6 here)</li>
+<li>An upstream router to which you can anounce your prefix, which preferably has some sort of transit peering, so your prefix actually gets anounced to the internet</li>
+</ul>
+<h2>Setting up the actual cluster</h2>
+<p>Now to the more interesting part of this article: Actually Setting the cluster up.</p>
+<h3>Setting up the nodes</h3>
+<p>Setting up the nodes is pretty straight forward <em>for now</em>. Just install microk8s via snap. Execute these commands on <em>all</em> of your nodes:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>snap<span class="w"> </span>install<span class="w"> </span>microk8s<span class="w"> </span>--classic
+</code></pre></div>
+
+<p>Then just wait until microk8s is ready:</p>
+<div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span>status<span class="w"> </span>--wait-ready
+</code></pre></div>
+
+<p>Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things in this node, which will later get propagated to the other nodes.</p>
+<h4>Enabling IPv6 on the cluster-internal ip spaces</h4>
+<p>You only need to execute these commands on your master node.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>patch<span class="w"> </span>/var/snap/microk8s/current/args/kube-proxy<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
+<span class="s">2c2,3</span>
+<span class="s">&lt; --cluster-cidr=10.1.0.0/16</span>
+<span class="s">---</span>
+<span class="s">&gt; --cluster-cidr=10.1.0.0/16,fd01::/64</span>
+<span class="s">&gt; </span>
+<span class="s">EOF</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>patch<span class="w"> </span>/var/snap/microk8s/current/args/kube-apiserver<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
+<span class="s">2c2</span>
+<span class="s">&lt; --service-cluster-ip-range=10.152.183.0/24</span>
+<span class="s">---</span>
+<span class="s">&gt; --service-cluster-ip-range=10.152.183.0/24,fd98::/108</span>
+<span class="s">&gt;</span>
+<span class="s">EOF</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>patch<span class="w"> </span>/var/snap/microk8s/current/args/kube-controller-manager<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
+<span class="s">7a8,11</span>
+<span class="s">&gt; --service-cluster-ip-range=10.152.183.0/24,fd98::/108</span>
+<span class="s">&gt; --cluster-cidr=10.1.0.0/16,fd01::/64</span>
+<span class="s">&gt; </span>
+<span class="s">EOF</span>
+</code></pre></div>
+
+<h4>Enabling IPv6 for calico</h4>
+<p>microk8s uses calico as its CNI, so we have to adjust the calico configuration so that it actually assigns v6 addresses to our pods and services. This involves both the calico 'master' service, as well as the calico node service.</p>
+<div class="highlight"><pre><span></span><code>cat<span class="w"> </span><span class="s">&lt;&lt; EOF &gt; calico-config.patch</span>
+<span class="s">data:</span>
+<span class="s">  cni_network_config: |-</span>
+<span class="s">    {</span>
+<span class="s">      &quot;name&quot;: &quot;k8s-pod-network&quot;,</span>
+<span class="s">      &quot;cniVersion&quot;: &quot;0.3.1&quot;,</span>
+<span class="s">      &quot;plugins&quot;: [</span>
+<span class="s">        {</span>
+<span class="s">          &quot;type&quot;: &quot;calico&quot;,</span>
+<span class="s">          &quot;log_level&quot;: &quot;info&quot;,</span>
+<span class="s">          &quot;datastore_type&quot;: &quot;kubernetes&quot;,</span>
+<span class="s">          &quot;nodename_file_optional&quot;: true,</span>
+<span class="s">          &quot;nodename&quot;: &quot;__KUBERNETES_NODE_NAME__&quot;,</span>
+<span class="s">          &quot;mtu&quot;: __CNI_MTU__,</span>
+<span class="s">          &quot;ipam&quot;: {</span>
+<span class="s">              &quot;type&quot;: &quot;calico-ipam&quot;,</span>
+<span class="s">              &quot;assign_ipv4&quot;: &quot;true&quot;,</span>
+<span class="s">              &quot;assign_ipv6&quot;: &quot;true&quot;</span>
+<span class="s">          },</span>
+<span class="s">          &quot;policy&quot;: {</span>
+<span class="s">              &quot;type&quot;: &quot;k8s&quot;</span>
+<span class="s">          },</span>
+<span class="s">          &quot;kubernetes&quot;: {</span>
+<span class="s">              &quot;kubeconfig&quot;: &quot;__KUBECONFIG_FILEPATH__&quot;</span>
+<span class="s">          }</span>
+<span class="s">        },</span>
+<span class="s">        {</span>
+<span class="s">          &quot;type&quot;: &quot;portmap&quot;,</span>
+<span class="s">          &quot;snat&quot;: true,</span>
+<span class="s">          &quot;capabilities&quot;: {&quot;portMappings&quot;: true}</span>
+<span class="s">        },</span>
+<span class="s">        {</span>
+<span class="s">          &quot;type&quot;: &quot;bandwidth&quot;,</span>
+<span class="s">          &quot;capabilities&quot;: {&quot;bandwidth&quot;: true}</span>
+<span class="s">        }</span>
+<span class="s">      ]</span>
+<span class="s">    }</span>
+<span class="s">  typha_service_name: none</span>
+<span class="s">  veth_mtu: &quot;1440&quot;</span>
+<span class="s">EOF</span>
+kubectl<span class="w"> </span>patch<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>configmaps/calico-config<span class="w"> </span>--patch-file<span class="o">=</span>calico-config.patch
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>cat<span class="w"> </span><span class="s">&lt;&lt; EOF &gt; calico-node.patch</span>
+<span class="s">spec:</span>
+<span class="s">  template:</span>
+<span class="s">    spec:</span>
+<span class="s">      containers:</span>
+<span class="s">      - env:</span>
+<span class="s">        - name: IP6</span>
+<span class="s">          value: autodetect</span>
+<span class="s">        - name: IP6_AUTODETECTION_METHOD</span>
+<span class="s">          value: can-reach=www.google.com</span>
+<span class="s">        - name: CALICO_IPV6POOL_CIDR</span>
+<span class="s">          value: fd01::/64</span>
+<span class="s">        - name: FELIX_IPV6SUPPORT</span>
+<span class="s">          value: &quot;true&quot;</span>
+<span class="s">        name: calico-node</span>
+<span class="s">EOF</span>
+kubectl<span class="w"> </span>patch<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>daemonset/calico-node<span class="w"> </span>--patch-file<span class="o">=</span>calico-node.patch
+</code></pre></div>
+
+<h4>Installing calicoctl</h4>
+<p>To add our configured v6 address pool to calico, we have to install <code>calicoctl</code> in our cluster. The version of <code>calicoctl</code> <em>has</em> to match the version of calico installed in your cluster. At the time of writing this post, the version shipped with microk8s is <code>3.25.0</code>. In case yours differs, just adjust the url accordingly:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calicoctl.yaml
+</code></pre></div>
+
+<h4>Adding the IP pool to calico</h4>
+<p>Now we can tell calico which IPs to hand out to resources in our cluster:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-i<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>calicoctl<span class="w"> </span>--<span class="w"> </span>/calicoctl<span class="w"> </span>replace<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
+<span class="s">apiVersion: projectcalico.org/v3</span>
+<span class="s">kind: IPPool</span>
+<span class="s">metadata:</span>
+<span class="s">  name: default-ipv6-ippool</span>
+<span class="s">spec:</span>
+<span class="s">  blockSize: 122</span>
+<span class="s">  cidr: fd01::/64</span>
+<span class="s">  ipipMode: Never</span>
+<span class="s">  nodeSelector: all()</span>
+<span class="s">  vxlanMode: Never</span>
+<span class="s">  natOutgoing: true</span>
+<span class="s">EOF</span>
+</code></pre></div>
+
+<p>And thats it, the networking part is done! Now we just have to restart microk8s:</p>
+<div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span>stop
+microk8s<span class="w"> </span>start
+</code></pre></div>
+
+<h4>Joining the nodes into a cluster</h4>
+<p>Now we can finally join the nodes together to form a cluster. To do this, we have to create a token from our master node:</p>
+<div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span>add-node
+</code></pre></div>
+
+<p>This will produce the following output:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">From</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">node</span><span class="w"> </span><span class="nv">you</span><span class="w"> </span><span class="nv">wish</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">this</span><span class="w"> </span><span class="nv">cluster</span>,<span class="w"> </span><span class="nv">run</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">following</span>:
+<span class="nv">microk8s</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="mi">192</span>.<span class="mi">168</span>.<span class="mi">1</span>.<span class="mi">230</span>:<span class="mi">25000</span><span class="o">/</span><span class="mi">92</span><span class="nv">b2db237428470dc4fcfc4ebbd9dc81</span><span class="o">/</span><span class="mi">2</span><span class="nv">c0cb3284b05</span>
+
+<span class="nv">Use</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="s1">&#39;--worker&#39;</span><span class="w"> </span><span class="nv">flag</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">node</span><span class="w"> </span><span class="nv">as</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">worker</span><span class="w"> </span><span class="nv">not</span><span class="w"> </span><span class="nv">running</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">control</span><span class="w"> </span><span class="nv">plane</span>,<span class="w"> </span><span class="nv">eg</span>:
+<span class="nv">microk8s</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="mi">192</span>.<span class="mi">168</span>.<span class="mi">1</span>.<span class="mi">230</span>:<span class="mi">25000</span><span class="o">/</span><span class="mi">92</span><span class="nv">b2db237428470dc4fcfc4ebbd9dc81</span><span class="o">/</span><span class="mi">2</span><span class="nv">c0cb3284b05</span><span class="w"> </span><span class="o">--</span><span class="nv">worker</span>
+
+<span class="k">If</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">node</span><span class="w"> </span><span class="nv">you</span><span class="w"> </span><span class="nv">are</span><span class="w"> </span><span class="nv">adding</span><span class="w"> </span><span class="nv">is</span><span class="w"> </span><span class="nv">not</span><span class="w"> </span><span class="nv">reachable</span><span class="w"> </span><span class="nv">through</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">default</span><span class="w"> </span><span class="nv">interface</span><span class="w"> </span><span class="nv">you</span><span class="w"> </span><span class="nv">can</span><span class="w"> </span><span class="nv">use</span><span class="w"> </span><span class="nv">one</span><span class="w"> </span><span class="nv">of</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">following</span>:
+<span class="nv">microk8s</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="mi">192</span>.<span class="mi">168</span>.<span class="mi">1</span>.<span class="mi">230</span>:<span class="mi">25000</span><span class="o">/</span><span class="mi">92</span><span class="nv">b2db237428470dc4fcfc4ebbd9dc81</span><span class="o">/</span><span class="mi">2</span><span class="nv">c0cb3284b05</span>
+<span class="nv">microk8s</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="mi">10</span>.<span class="mi">23</span>.<span class="mi">209</span>.<span class="mi">1</span>:<span class="mi">25000</span><span class="o">/</span><span class="mi">92</span><span class="nv">b2db237428470dc4fcfc4ebbd9dc81</span><span class="o">/</span><span class="mi">2</span><span class="nv">c0cb3284b05</span>
+<span class="nv">microk8s</span><span class="w"> </span><span class="nv">join</span><span class="w"> </span><span class="mi">172</span>.<span class="mi">17</span>.<span class="mi">0</span>.<span class="mi">1</span>:<span class="mi">25000</span><span class="o">/</span><span class="mi">92</span><span class="nv">b2db237428470dc4fcfc4ebbd9dc81</span><span class="o">/</span><span class="mi">2</span><span class="nv">c0cb3284b05</span>
+</code></pre></div>
+
+<p>Just execute one of the commands on your worker node, to join it into the cluster. Note that you have to execute the <code>add-node</code> command once for every node you want to join.</p>
+<p>Pitfall: If your master node cant resolve the worker nodes hostnames to their respective IPs (e.g. because you dont have a dns server in your network), the joining wont work properly. To combat this, you can either add a dns server in your network, or just add the nodes as a static entry in <code>/etc/hosts</code> on the master node.</p>
+<h4>Adding the DNS server component to microk8s</h4>
+<p>The final step to setting up our nodes is adding the dns server component to microk8s:</p>
+<div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>dashboard<span class="w"> </span>dns
+</code></pre></div>
+
+<p>Once again, this command only has to be executed on the master node. The worker nodes will all config changes.</p>
+<h3>Installing MetalLB</h3>
+<p>As you can see from <code>microk8s status</code>, microk8s already includes metallb as an addon. However we wont be able to use this, as the default MetalLB configuration will use its own BGP daemon, which doesnt support IPv6. Hence we need to use the <code>frr</code>-mode, which, as the name suggests, uses frr as its bgp daemon. Until this option is included in the official plugin, we have to add it as a custom addon repository:</p>
+<div class="highlight"><pre><span></span><code>
+</code></pre></div>
+
+<p>After that we can just enable it:</p>
+<div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>metallb-frr
+</code></pre></div>
+
+<p>You will be prompted for a IP prefix, which will be the default Adresspool for Metallb. Just input any random prefix, we wont be using it. Now Metallb should be successfully installed. Until we can use this though, we first have to set up our router correctly.</p>
+<p>⚠️ There is currently a bug in metallb which sometimes messes up the cert configuration for the webhooks metallb provides so that kubernetes can validate the custom resources. The issue is documented <a href="https://github.com/metallb/metallb/issues/1597">here</a>. If this applies to you, i would recommend setting <code>failurePolicy=Ignore</code> like it is suggested there in your metallb deployment. This requires modifying the microk8s addon.</p>
+<h2>Setting up our VyOS router</h2>
+<p>(Skip this part if you already have a BGP enabled router in your network and know how to configure it)</p>
+<p>As every configuration is different, i will only go into detail on how to setup the peerings to the kubernetes nodes. At the end of this post, all prefixes anounced from kubernetes will be in the routing table of this VyOS router, but you still have to redistribute them to your ISP.</p>
+<p>At this point, you should have a vyos router up and running which is in the same network as your nodes.</p>
+<p>To establish peering sessions to our nodes, we first have to configure the system-ASN. If you have an ASN, configure it accordingly, otherwise use a random ASN fromt the <a href="https://datatracker.ietf.org/doc/html/rfc6996">Private ASN range (RFC6996)</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="nb">set</span><span class="w"> </span>protocols<span class="w"> </span>bgp<span class="w"> </span>system-as<span class="w"> </span><span class="s1">&#39;your-asn&#39;</span>
+<span class="nb">set</span><span class="w"> </span>protocols<span class="w"> </span>bgp<span class="w"> </span>parameters<span class="w"> </span>router-id<span class="w"> </span><span class="s1">&#39;10.0.0.1&#39;</span>
+</code></pre></div>
+
+<p>Then we can add a peering for each node (adjust the ip accordingly for each node):</p>
+<div class="highlight"><pre><span></span><code><span class="nb">set</span><span class="w"> </span>protocols<span class="w"> </span>bgp<span class="w"> </span>neighbor<span class="w"> </span><span class="m">10</span>.0.0.2<span class="w"> </span>address-family<span class="w"> </span>ipv6-unicast
+<span class="nb">set</span><span class="w"> </span>protocols<span class="w"> </span>bgp<span class="w"> </span>neighbor<span class="w"> </span><span class="m">10</span>.0.0.2<span class="w"> </span>description<span class="w"> </span><span class="s1">&#39;metallb-node-01&#39;</span>
+<span class="nb">set</span><span class="w"> </span>protocols<span class="w"> </span>bgp<span class="w"> </span>neighbor<span class="w"> </span><span class="m">10</span>.0.0.2<span class="w"> </span>remote-as<span class="w"> </span><span class="s1">&#39;213127&#39;</span>
+</code></pre></div>
+
+<p>As expected, the sessions wont come up just yet, as we dont have the peerings configured on the nodes themselves.</p>
+<h2>Configuring MetalLB</h2>
+<p>To configure MetalLB, we essentially need three things:
+1. An Adresspool
+2. A BGPPeer
+3. An Anouncement</p>
+<h4>The Adress Space</h4>
+<p>First we need to configure an adresspool from which MetalLB will hand out adresses. We do this by defining a resource for the CRD <code>IPAddressPool</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">IPAddressPool</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-pool</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb-system</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">addresses</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your:prefix::/64</span>
+</code></pre></div>
+
+<p>I have used an adress space from my prefix, you will obviously have to adjust the prefix accordingly.</p>
+<p>Save the file under a name of your choice and apply it with</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>pool.yaml
+</code></pre></div>
+
+<h4>The BGPPeer</h4>
+<p>For the Peering with our VyOS router, we also define a custom resource:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta2</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">BGPPeer</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vyos-gw</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb-system</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">myASN</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-asn</span>
+<span class="w">  </span><span class="nt">peerASN</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-asn</span>
+<span class="w">  </span><span class="nt">peerAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.1</span>
+</code></pre></div>
+
+<p>Once again, adjust the ASN and the address of your router and apply it with</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>peer.yaml
+</code></pre></div>
+
+<h4>The advertisement</h4>
+<p>Metallb wont anounce any prefixes until you have defined a <code>BGPAdvertisement</code> resource. We dont need to actually configure anything in it, so you can leave it as it is.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">BGPAdvertisement</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-advertisement</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb-system</span>
+</code></pre></div>
+
+<p>And one last time, apply this with </p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>advertisement.yaml
+</code></pre></div>
+
+<p>Now MetalLB should be configured correctly and ready to go.</p>
+<h2>Deploying our first resource</h2>
+<p>To test our new cluster, we can deploy a very simple <code>nginx</code> application:</p>
+<p><code>nginx.yaml</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metallb.universe.tf/address-pool</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-pool</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ipFamilyPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">SingleStack</span>
+<span class="w">  </span><span class="nt">ipFamilies</span><span class="p">:</span><span class="w"> </span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">IPv6</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">    </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
+<span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx:latest</span>
+<span class="w">        </span><span class="nt">imagePullPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Always</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">          </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
+</code></pre></div>
+
+<p>Take a look at the deployment before you deploy it, to see if you understand what its actually doing.</p>
+<p>Take a look at
+* <code>annotations.metallb.universe.tf/adress-pool: default-pool</code> Here we tell metallb from which pool it should choose an address for this service. The pool is the one we configured earlier
+* <code>spec.ipFamilyPolicy: SingleStack</code> we strictly want IPv6-only</p>
+<p>Deploy the application with</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>nginx.yaml
+</code></pre></div>
+
+<p>Now we can check if our service got an address:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>svc/nginx<span class="w"> </span>-n<span class="w"> </span>default
+
+NAME<span class="w">    </span>TYPE<span class="w">           </span>CLUSTER-IP<span class="w">   </span>EXTERNAL-IP<span class="w">          </span>PORT<span class="o">(</span>S<span class="o">)</span><span class="w">        </span>AGE
+nginx<span class="w">   </span>LoadBalancer<span class="w">   </span>fd98::1163<span class="w">   </span>2a0e:8f02:f000:2::<span class="w">   </span><span class="m">80</span>:30544/TCP<span class="w">   </span>25s
+</code></pre></div>
+
+<p>If your BGP configuration is setup probably, the address under <code>EXTERNAL-IP</code>should be publicly reachable. Lets check:</p>
+<p><img alt="" src="images/screenshot.png"></p>
+<p>Yay \o/ seems like its working.</p>
+<h2>Continuing from here</h2>
+<p>We now have a working kubernetes cluster in which we can deploy our workloads. One part is however still missing: Storage. For this i would recommend to install longhorn, which provides everythin necessary for your kubernetes cluster storage-wise.</p>
+<h3>Troubleshooting</h3>
+<p>If your service isnt reachable, try to narrow down the source:</p>
+<h4>Is the address getting anounced to your router?</h4>
+<p>First, check if the anuoncement is actually made from the metallb-<code>speaker</code> components. In the case of VyOS, you can check the received anouncements with</p>
+<div class="highlight"><pre><span></span><code><span class="k">show</span><span class="w"> </span><span class="nv">bgp</span><span class="w"> </span><span class="nv">summary</span>
+</code></pre></div>
+
+<p>The number of prefixes received should match your expectation.</p>
+<h4>Is the internal frr daemon anouncing the prefixes?</h4>
+<p>Sometimes it might be worth to check if metallb actually generated the frr configuration correctly. To do this, first check the name of the speaker pods:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>all<span class="w"> </span>-n<span class="w"> </span>metallb-system
+NAME<span class="w">                              </span>READY<span class="w">   </span>STATUS<span class="w"> </span>
+pod/speaker-lrp92<span class="w">                 </span><span class="m">4</span>/4<span class="w">     </span>Running
+pod/controller-7bfbddb7f6-vtrrb<span class="w">   </span><span class="m">1</span>/1<span class="w">     </span>Running
+pod/speaker-d2g4m<span class="w">                 </span><span class="m">4</span>/4<span class="w">     </span>Running
+</code></pre></div>
+
+<p>Then, choose one of the speaker pods, and get a shell into the <code>frr</code> container:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--stdin<span class="w"> </span>--tty<span class="w"> </span>-n<span class="w"> </span>metallb-system<span class="w"> </span>-c<span class="w"> </span>frr<span class="w"> </span>speaker-d2g4m<span class="w"> </span>--<span class="w"> </span>/bin/sh
+</code></pre></div>
+
+<p>Now, you can directly interact with frr by using the <a href="https://docs.frrouting.org/projects/dev-guide/en/latest/vtysh.html"><code>vtysh</code></a> command. Refer to the documentation for more information about it.</p>
+<h4>Further things to check</h4>
+<ul>
+<li>Did the assignment work (can you see an <code>EXTERNAL-IP</code> for the service)?<ul>
+<li>If not, check the logs of the metallb <code>controller</code> component for errors</li>
+</ul>
+</li>
+<li>Can you reach the service via ther <code>INTERNAL-IP</code><ul>
+<li>If not, the issue is probably not with metallb, but rather with the CNI or the service itself</li>
+</ul>
+</li>
+<li>Did the pods associated with the service receive an IPv6 address? (check with <code>kubectl describe pod/foo</code>)<ul>
+<li>If not, the CNI is probably improperly configured</li>
+</ul>
+</li>
+</ul>
+<h4></h4>
+<h3>Thanks</h3>
+<p>Many thanks to the <a href="https://reudnetz.org">reudnetz w.V.</a> for providing me with the infrastructure for this project.</p>
+  </div>
+  <div class="tag-cloud">
+    <p>
+    </p>
+  </div>
+
+
+
+
+
+
+</article>
+
+<footer>
+<p>
+  &copy; 2023  - This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/deed.en_US" target="_blank">Creative Commons Attribution-ShareAlike</a>
+</p>
+<p>
+Built with <a href="http://getpelican.com" target="_blank">Pelican</a> using <a href="http://bit.ly/flex-pelican" target="_blank">Flex</a> theme
+  <span class="footer-separator">|</span>
+  Switch to the <a href="javascript:void(0)" onclick="theme.switch(`dark`)">dark</a> | <a href="javascript:void(0)" onclick="theme.switch(`light`)">light</a> | <a href="javascript:void(0)" onclick="theme.switch(`browser`)">browser</a> theme
+  <script id="dark-theme-script"
+          src="/theme/dark-theme/dark-theme.min.js"
+          data-enable-auto-detect-theme="True"
+          data-default-theme="dark"
+          type="text/javascript">
+  </script>
+</p><p>
+  <a rel="license"
+     href="http://creativecommons.org/licenses/by-sa/4.0/"
+     target="_blank">
+    <img alt="Creative Commons License"
+         title="Creative Commons License"
+         style="border-width:0"
+           src="https://i.creativecommons.org/l/by-sa/4.0/80x15.png"
+         width="80"
+         height="15"/>
+  </a>
+</p></footer>  </main>
+
+<script type="application/ld+json">
+{
+  "@context" : "http://schema.org",
+  "@type" : "Blog",
+  "name": " mowoe blog ",
+  "url" : "",
+  "image": "/images/12197109.png",
+  "description": ""
+}
+</script>
+</body>
+</html>
