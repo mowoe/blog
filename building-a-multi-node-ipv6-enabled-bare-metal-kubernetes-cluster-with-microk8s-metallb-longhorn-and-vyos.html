@@ -43,13 +43,13 @@
  
 
 <meta name="author" content="mowoe" />
-<meta name="description" content="Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some noob …" />
+<meta name="description" content="Motivation Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some …" />
 <meta name="keywords" content="">
 
 
   <meta property="og:site_name" content="mowoe blog"/>
   <meta property="og:title" content="Building a multi-node IPv6-enabled bare-metal kubernetes cluster with microk8s, metallb, longhorn and VyOS"/>
-  <meta property="og:description" content="Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some noob …"/>
+  <meta property="og:description" content="Motivation Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to &#34;some …"/>
   <meta property="og:locale" content="en_US"/>
   <meta property="og:url" content="/building-a-multi-node-ipv6-enabled-bare-metal-kubernetes-cluster-with-microk8s-metallb-longhorn-and-vyos.html"/>
   <meta property="og:type" content="article"/>
@@ -112,22 +112,25 @@
 
 
   <div>
-    <p>Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to "some noob just fooling around".</p>
+    <p><img alt="" src="images/metallb_k8s_longhorn_heart.png"></p>
+<h2>Motivation</h2>
+<p>Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to "some noob just fooling around".</p>
 <p>I always wanted to operate a cluster myself to really understand whats going on under the hood. The usual cloud providers are very happy to provide you with one, for the small price of ~50$ for one controlplane node and no worker nodes. Obviously this is a bit too expensive to justify for a little hobby project. </p>
 <p>This was the moment i decided to try building a bare-metal cluster, as, in theory, this would be a lot cheaper as you can just use off-the-shelf hosted servers, which are a lot cheaper per compute power in comparison. One small issue though: Due to the way kubernetes provisions workloads, you wont be able to just pull up a cluster and expect everything to work right away.</p>
 <p>Some examples for things which arent as easy as they seem:</p>
 <p><strong>Networking</strong></p>
-<p>Kubernetes assigns pods and containers IP addresses like you would expect, however the old idea of "one computer gets one ip address and thats it" is far from the reality in kubernetes. Most of the time, Network Ingress is controlled via the, you guessed it, <a href="https://kubernetes.io/docs/concepts/services-networking/ingress/">Ingress</a> resource. Combined with LoadBalancers, kubernetes provides a robust way of how the outside can interact with your services. Heavily simplified it works roughly like this:</p>
+<p>Kubernetes assigns pods and containers IP addresses like you would expect, however the old idea of "one computer gets one ip address and thats it" is far from the reality in kubernetes. Most of the time, Network Ingress is controlled via, you guessed it, the <a href="https://kubernetes.io/docs/concepts/services-networking/ingress/">Ingress</a> resource. Combined with LoadBalancers, kubernetes provides a robust way of how the outside can interact with your services. Heavily simplified it works roughly like this:</p>
 <ol>
 <li>A Deployment requests that it wants to receive outside traffic</li>
 <li>The cluster provisions a LoadBalancer, and an IP with it and directs traffic it receives there to the services</li>
 </ol>
-<p>In cloud environments like AWS and Google Cloud (EKS and GKE), the cluster actually provisions a resource in the cloud (Often also calles a loadbalancer), which you will be billed for. This means, the outside will never directly communicate with your clusters network interfaces, but rather via this little detour.</p>
+<p>In cloud environments like AWS and Google Cloud (EKS and GKE), the cluster actually provisions a resource in the cloud (Often also called a loadbalancer), which you will be billed for. This means, the outside will never directly communicate with your clusters network interfaces, but rather via this little detour.</p>
 <p>Now, for bare-metal deployments, someone, or rather, something has to be the entity providing these loadbalancers, as this is not included in any core kubernetes components. Some time ago, <a href="https://metallb.universe.tf/">MetalLB</a> was created for this. MetalLB functions as the provider for LoadBalancers and basically passes out IP Adresses from different Pools and announces them either via BGP or L2 (ARP in the case of v4).</p>
 <p><strong>Storage</strong></p>
 <p>For Storage, the story is roughly the same. Kubernetes has, by design, a different approach to storage, as most applications are meant to be stateless and therefore dont need any persistent Storage. This is of course different for things like databases and so on, most of the time is generally a bad idea to deploy those in kubernetes though. There will however be occasions in which you need persistent storage which survives after a container is killed or deleted. For this, kubernetes has <a href="">PersistentVolumes</a>.</p>
 <p>In most cloud environments, the cloud provider will provision such volumes in the cloud environment itself. As we have none of that in bare-metal deployments, we need something else: <a href="">Longhorn</a> is a tool which provides persistent volume functionality by storing data on the nodes themselves. We will use longhorn to provide storage for our bare-metal cluster.</p>
 <h3>Basic ideas and concepts of the Deployment</h3>
+<p><img alt="" src="images/infograph.png"></p>
 <p>The cluster will consist of 3 nodes (this number is abritrary, you can either use just one node, or any other number, for better high availibility performance, this number should however be odd). Each of these nodes is a virtual machine on one hypervisor (in my case proxmox, this shouldnt matter though). Additionaly we need a router speaking BGP, to which we can later anounce adresses of our cluster. In theory this router doesnt have to be controlled by you (e.g. talking directly to your ISP), but the bgp advertisements will get as small as /32 for v4 and /128 for v6, which any reasonable ISP would reject. Additionally we will establish a BGP peering between each node and the router, another fact which most ISPs will (rightfuly so) reject. This is why i chose to deploy a VyOS router along with the nodes, to which they can talk via BGP. This router will then "reanounce" the received routes via OSPF to my ISP (which in my case is me).</p>
 <h5>TL;DR Prerequisites</h5>
 <ul>
@@ -147,7 +150,7 @@
 <div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span>status<span class="w"> </span>--wait-ready
 </code></pre></div>
 
-<p>Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things in this node, which will later get propagated to the other nodes.</p>
+<p>Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things on this node, which will later get propagated to the other nodes.</p>
 <h4>Enabling IPv6 on the cluster-internal ip spaces</h4>
 <p>You only need to execute these commands on your master node.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>patch<span class="w"> </span>/var/snap/microk8s/current/args/kube-proxy<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
@@ -286,13 +289,13 @@ microk8s<span class="w"> </span>start
 </code></pre></div>
 
 <p>Just execute one of the commands on your worker node, to join it into the cluster. Note that you have to execute the <code>add-node</code> command once for every node you want to join.</p>
-<p>Pitfall: If your master node cant resolve the worker nodes hostnames to their respective IPs (e.g. because you dont have a dns server in your network), the joining wont work properly. To combat this, you can either add a dns server in your network, or just add the nodes as a static entry in <code>/etc/hosts</code> on the master node.</p>
+<p>⚠️ Pitfall: If your master node cant resolve the worker nodes hostnames to their respective IPs (e.g. because you dont have a dns server in your network), the joining wont work properly. To combat this, you can either add a dns server in your network, or just add the nodes as a static entry in <code>/etc/hosts</code> on the master node.</p>
 <h4>Adding the DNS server component to microk8s</h4>
 <p>The final step to setting up our nodes is adding the dns server component to microk8s:</p>
 <div class="highlight"><pre><span></span><code>microk8s<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>dashboard<span class="w"> </span>dns
 </code></pre></div>
 
-<p>Once again, this command only has to be executed on the master node. The worker nodes will all config changes.</p>
+<p>Once again, this command only has to be executed on the master node. The worker nodes will inherit all config changes.</p>
 <h3>Installing MetalLB</h3>
 <p>As you can see from <code>microk8s status</code>, microk8s already includes metallb as an addon. However we wont be able to use this, as the default MetalLB configuration will use its own BGP daemon, which doesnt support IPv6. Hence we need to use the <code>frr</code>-mode, which, as the name suggests, uses frr as its bgp daemon. Until this option is included in the official plugin, we have to add it as a custom addon repository:</p>
 <div class="highlight"><pre><span></span><code>
@@ -321,12 +324,15 @@ microk8s<span class="w"> </span>start
 
 <p>As expected, the sessions wont come up just yet, as we dont have the peerings configured on the nodes themselves.</p>
 <h2>Configuring MetalLB</h2>
-<p>To configure MetalLB, we essentially need three things:
-1. An Adresspool
-2. A BGPPeer
-3. An Anouncement</p>
+<p>To configure MetalLB, we essentially need three things:</p>
+<ol>
+<li>An Adresspool</li>
+<li>A BGPPeer</li>
+<li>An Anouncement</li>
+</ol>
 <h4>The Adress Space</h4>
 <p>First we need to configure an adresspool from which MetalLB will hand out adresses. We do this by defining a resource for the CRD <code>IPAddressPool</code>:</p>
+<p><code>pool.yaml</code></p>
 <div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta1</span>
 <span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">IPAddressPool</span>
 <span class="nt">metadata</span><span class="p">:</span>
@@ -344,6 +350,7 @@ microk8s<span class="w"> </span>start
 
 <h4>The BGPPeer</h4>
 <p>For the Peering with our VyOS router, we also define a custom resource:</p>
+<p><code>peer.yaml</code></p>
 <div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta2</span>
 <span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">BGPPeer</span>
 <span class="nt">metadata</span><span class="p">:</span>
@@ -360,7 +367,8 @@ microk8s<span class="w"> </span>start
 </code></pre></div>
 
 <h4>The advertisement</h4>
-<p>Metallb wont anounce any prefixes until you have defined a <code>BGPAdvertisement</code> resource. We dont need to actually configure anything in it, so you can leave it as it is.</p>
+<p>Metallb wont anounce any prefixes until you have defined a <code>BGPAdvertisement</code> resource. We dont need to actually configure anything in it, so you can leave it as is.</p>
+<p><code>advertisement.yaml</code></p>
 <div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metallb.io/v1beta1</span>
 <span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">BGPAdvertisement</span>
 <span class="nt">metadata</span><span class="p">:</span>
@@ -375,7 +383,7 @@ microk8s<span class="w"> </span>start
 <p>Now MetalLB should be configured correctly and ready to go.</p>
 <h2>Deploying our first resource</h2>
 <p>To test our new cluster, we can deploy a very simple <code>nginx</code> application:</p>
-<p><code>nginx.yaml</code>:</p>
+<p><code>nginx.yaml</code></p>
 <div class="highlight"><pre><span></span><code><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
 <span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
 <span class="nt">metadata</span><span class="p">:</span>
@@ -421,10 +429,11 @@ microk8s<span class="w"> </span>start
 <span class="w">          </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
 </code></pre></div>
 
-<p>Take a look at the deployment before you deploy it, to see if you understand what its actually doing.</p>
-<p>Take a look at
-* <code>annotations.metallb.universe.tf/adress-pool: default-pool</code> Here we tell metallb from which pool it should choose an address for this service. The pool is the one we configured earlier
-* <code>spec.ipFamilyPolicy: SingleStack</code> we strictly want IPv6-only</p>
+<p>Take a look at</p>
+<ul>
+<li><code>annotations.metallb.universe.tf/adress-pool: default-pool</code> Here we tell metallb from which pool it should choose an address for this service. The pool is the one we configured earlier</li>
+<li><code>spec.ipFamilyPolicy: SingleStack</code> we strictly want IPv6-only</li>
+</ul>
 <p>Deploy the application with</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>nginx.yaml
 </code></pre></div>
