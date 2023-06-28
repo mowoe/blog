@@ -2,6 +2,9 @@ Title: Building a multi-node IPv6-enabled bare-metal kubernetes cluster with mic
 Date: 2023-06-28 12:35
 Category: Guides
 
+
+![](images/metallb_k8s_longhorn_heart.png)
+## Motivation
 Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to "some noob just fooling around".
 
 I always wanted to operate a cluster myself to really understand whats going on under the hood. The usual cloud providers are very happy to provide you with one, for the small price of ~50$ for one controlplane node and no worker nodes. Obviously this is a bit too expensive to justify for a little hobby project. 
@@ -12,12 +15,12 @@ Some examples for things which arent as easy as they seem:
 
 **Networking**
 
-Kubernetes assigns pods and containers IP addresses like you would expect, however the old idea of "one computer gets one ip address and thats it" is far from the reality in kubernetes. Most of the time, Network Ingress is controlled via the, you guessed it, [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) resource. Combined with LoadBalancers, kubernetes provides a robust way of how the outside can interact with your services. Heavily simplified it works roughly like this:
+Kubernetes assigns pods and containers IP addresses like you would expect, however the old idea of "one computer gets one ip address and thats it" is far from the reality in kubernetes. Most of the time, Network Ingress is controlled via, you guessed it, the [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) resource. Combined with LoadBalancers, kubernetes provides a robust way of how the outside can interact with your services. Heavily simplified it works roughly like this:
 
 1. A Deployment requests that it wants to receive outside traffic
 2. The cluster provisions a LoadBalancer, and an IP with it and directs traffic it receives there to the services
 
-In cloud environments like AWS and Google Cloud (EKS and GKE), the cluster actually provisions a resource in the cloud (Often also calles a loadbalancer), which you will be billed for. This means, the outside will never directly communicate with your clusters network interfaces, but rather via this little detour.
+In cloud environments like AWS and Google Cloud (EKS and GKE), the cluster actually provisions a resource in the cloud (Often also called a loadbalancer), which you will be billed for. This means, the outside will never directly communicate with your clusters network interfaces, but rather via this little detour.
 
 Now, for bare-metal deployments, someone, or rather, something has to be the entity providing these loadbalancers, as this is not included in any core kubernetes components. Some time ago, [MetalLB](https://metallb.universe.tf/) was created for this. MetalLB functions as the provider for LoadBalancers and basically passes out IP Adresses from different Pools and announces them either via BGP or L2 (ARP in the case of v4).
 
@@ -28,6 +31,8 @@ For Storage, the story is roughly the same. Kubernetes has, by design, a differe
 In most cloud environments, the cloud provider will provision such volumes in the cloud environment itself. As we have none of that in bare-metal deployments, we need something else: [Longhorn]() is a tool which provides persistent volume functionality by storing data on the nodes themselves. We will use longhorn to provide storage for our bare-metal cluster.
 
 ### Basic ideas and concepts of the Deployment
+
+![](images/infograph.png)
 
 The cluster will consist of 3 nodes (this number is abritrary, you can either use just one node, or any other number, for better high availibility performance, this number should however be odd). Each of these nodes is a virtual machine on one hypervisor (in my case proxmox, this shouldnt matter though). Additionaly we need a router speaking BGP, to which we can later anounce adresses of our cluster. In theory this router doesnt have to be controlled by you (e.g. talking directly to your ISP), but the bgp advertisements will get as small as /32 for v4 and /128 for v6, which any reasonable ISP would reject. Additionally we will establish a BGP peering between each node and the router, another fact which most ISPs will (rightfuly so) reject. This is why i chose to deploy a VyOS router along with the nodes, to which they can talk via BGP. This router will then "reanounce" the received routes via OSPF to my ISP (which in my case is me).
 
@@ -49,7 +54,7 @@ Then just wait until microk8s is ready:
 ```bash
 microk8s status --wait-ready
 ```
-Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things in this node, which will later get propagated to the other nodes.
+Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things on this node, which will later get propagated to the other nodes.
 
 #### Enabling IPv6 on the cluster-internal ip spaces
 You only need to execute these commands on your master node.
@@ -191,13 +196,13 @@ microk8s join 172.17.0.1:25000/92b2db237428470dc4fcfc4ebbd9dc81/2c0cb3284b05
 ```
 Just execute one of the commands on your worker node, to join it into the cluster. Note that you have to execute the `add-node` command once for every node you want to join.
 
-Pitfall: If your master node cant resolve the worker nodes hostnames to their respective IPs (e.g. because you dont have a dns server in your network), the joining wont work properly. To combat this, you can either add a dns server in your network, or just add the nodes as a static entry in `/etc/hosts` on the master node.
+⚠️ Pitfall: If your master node cant resolve the worker nodes hostnames to their respective IPs (e.g. because you dont have a dns server in your network), the joining wont work properly. To combat this, you can either add a dns server in your network, or just add the nodes as a static entry in `/etc/hosts` on the master node.
 #### Adding the DNS server component to microk8s
 The final step to setting up our nodes is adding the dns server component to microk8s:
 ```bash
 microk8s enable dashboard dns
 ```
-Once again, this command only has to be executed on the master node. The worker nodes will all config changes.
+Once again, this command only has to be executed on the master node. The worker nodes will inherit all config changes.
 
 ### Installing MetalLB
 As you can see from `microk8s status`, microk8s already includes metallb as an addon. However we wont be able to use this, as the default MetalLB configuration will use its own BGP daemon, which doesnt support IPv6. Hence we need to use the `frr`-mode, which, as the name suggests, uses frr as its bgp daemon. Until this option is included in the official plugin, we have to add it as a custom addon repository:
@@ -233,12 +238,15 @@ As expected, the sessions wont come up just yet, as we dont have the peerings co
 
 ## Configuring MetalLB
 To configure MetalLB, we essentially need three things:
+
 1. An Adresspool
 2. A BGPPeer
 3. An Anouncement
 
 #### The Adress Space
 First we need to configure an adresspool from which MetalLB will hand out adresses. We do this by defining a resource for the CRD `IPAddressPool`:
+
+`pool.yaml`
 ```yaml
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
@@ -257,6 +265,8 @@ kubectl apply -f pool.yaml
 ```
 #### The BGPPeer
 For the Peering with our VyOS router, we also define a custom resource:
+
+`peer.yaml`
 ```yaml
 apiVersion: metallb.io/v1beta2
 kind: BGPPeer
@@ -273,7 +283,9 @@ Once again, adjust the ASN and the address of your router and apply it with
 kubectl apply -f peer.yaml
 ```
 #### The advertisement
-Metallb wont anounce any prefixes until you have defined a `BGPAdvertisement` resource. We dont need to actually configure anything in it, so you can leave it as it is.
+Metallb wont anounce any prefixes until you have defined a `BGPAdvertisement` resource. We dont need to actually configure anything in it, so you can leave it as is.
+
+`advertisement.yaml`
 ```yaml
 apiVersion: metallb.io/v1beta1
 kind: BGPAdvertisement
@@ -290,7 +302,7 @@ Now MetalLB should be configured correctly and ready to go.
 ## Deploying our first resource
 To test our new cluster, we can deploy a very simple `nginx` application:
 
-`nginx.yaml`:
+`nginx.yaml`
 ```yaml
 kind: Service
 apiVersion: v1
@@ -336,9 +348,9 @@ spec:
         - containerPort: 80
           protocol: TCP
 ```
-Take a look at the deployment before you deploy it, to see if you understand what its actually doing.
 
 Take a look at
+
 * `annotations.metallb.universe.tf/adress-pool: default-pool` Here we tell metallb from which pool it should choose an address for this service. The pool is the one we configured earlier
 * `spec.ipFamilyPolicy: SingleStack` we strictly want IPv6-only
 
