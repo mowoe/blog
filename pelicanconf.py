@@ -2,7 +2,9 @@ AUTHOR = 'mowoe'
 SITENAME = 'mowoe blog'
 SITEURL = ''
 
-SITETITLE = "mowoe"
+SITETITLE = "mowoe's blog"
+SITENAME = "mowoe's blog"
+SITESUBTITLE = "cloud native and other buzzwords"
 SITELOGO = "/images/12197109.png"
 
 PATH = 'content'

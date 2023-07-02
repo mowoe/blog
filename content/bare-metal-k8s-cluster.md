@@ -3,7 +3,8 @@ Date: 2023-06-28 12:35
 Category: Guides
 
 
-![](images/metallb_k8s_longhorn_heart.png)
+![metallb+kubernetes+longhorn+vyos=<3](images/metallb_k8s_longhorn_heart.png)
+*Some knowledge of how kubernetes works, as well as some networking basics might be helpful in understanding this post.*
 ## Motivation
 Through some changes in my job, i first came into contact with kubernetes ~1 year ago. In this time i learned a lot, however my learning process was always somehow limited by me only having access to clusters from my company, which, of course, werent very tolerant to "some noob just fooling around".
 
@@ -32,18 +33,18 @@ In most cloud environments, the cloud provider will provision such volumes in th
 
 ### Basic ideas and concepts of the Deployment
 
-![](images/infograph.png)
+![overview of what is covered in this post](images/infograph.png)
 
-The cluster will consist of 3 nodes (this number is abritrary, you can either use just one node, or any other number, for better high availibility performance, this number should however be odd). Each of these nodes is a virtual machine on one hypervisor (in my case proxmox, this shouldnt matter though). Additionaly we need a router speaking BGP, to which we can later anounce adresses of our cluster. In theory this router doesnt have to be controlled by you (e.g. talking directly to your ISP), but the bgp advertisements will get as small as /32 for v4 and /128 for v6, which any reasonable ISP would reject. Additionally we will establish a BGP peering between each node and the router, another fact which most ISPs will (rightfuly so) reject. This is why i chose to deploy a VyOS router along with the nodes, to which they can talk via BGP. This router will then "reanounce" the received routes via OSPF to my ISP (which in my case is me).
+The cluster will consist of 3 nodes (this number is abritrary, you can either use just one node, or any other number, for better high availibility performance, this number should however be odd). Each of these nodes is a virtual machine on one hypervisor (in my case proxmox, this shouldnt matter though). Additionaly we need a router speaking BGP, to which we can later announce adresses of our cluster. In theory this router doesnt have to be controlled by you (e.g. talking directly to your ISP), but the bgp advertisements will get as small as /32 for v4 and /128 for v6, which any reasonable ISP would reject. Additionally we will establish a BGP peering between each node and the router, another fact which most ISPs will (rightfuly so) reject. This is why i chose to deploy a VyOS router along with the nodes, to which they can talk via BGP. This router will then "reannounce" the received routes via OSPF to my ISP (which in my case is me).
 
 ##### TL;DR Prerequisites
 * Some Machines (or VMs) acting as nodes, running ubuntu
 * BGP-enabled router _or_ an additional VM to deploy a software router like VyOS
-* An IP prefix you own or you are allowed to anounce (i will only use v6 here)
-* An upstream router to which you can anounce your prefix, which preferably has some sort of transit peering, so your prefix actually gets anounced to the internet
+* An IP prefix you own or you are allowed to announce (i will only use v6 here)
+* An upstream router to which you can announce your prefix, which preferably has some sort of transit peering, so your prefix actually gets announced to the internet
 
 ## Setting up the actual cluster
-Now to the more interesting part of this article: Actually Setting the cluster up.
+Now to the more interesting part of this post: Actually Setting the cluster up.
 
 ### Setting up the nodes
 Setting up the nodes is pretty straight forward *for now*. Just install microk8s via snap. Execute these commands on *all* of your nodes:
@@ -205,21 +206,24 @@ microk8s enable dashboard dns
 Once again, this command only has to be executed on the master node. The worker nodes will inherit all config changes.
 
 ### Installing MetalLB
-As you can see from `microk8s status`, microk8s already includes metallb as an addon. However we wont be able to use this, as the default MetalLB configuration will use its own BGP daemon, which doesnt support IPv6. Hence we need to use the `frr`-mode, which, as the name suggests, uses frr as its bgp daemon. Until this option is included in the official plugin, we have to add it as a custom addon repository:
+As you can see from `microk8s status`, microk8s already includes metallb as an addon. However we wont be able to use this, as the default MetalLB configuration will use its own BGP daemon, which doesnt support IPv6. Hence we need to use the `frr`-mode, which, as the name suggests, uses frr as its bgp daemon. Until the core addons version supports this by itself, we have to modify it. To make things easier, i created a repo which you can just add as a dependency [here](https://github.com/mowoe/microk8s-metallb-frr-addon).
+Add the repo:
 ```bash
+microk8s addons repo add mowoe-metallb-frr https://github.com/mowoe/microk8s-metallb-frr-addon
+microk8s addons repo update mowoe-metallb-frr
 ```
 After that we can just enable it:
 ```bash
-microk8s enable metallb-frr
+microk8s enable mowoe-metallb-frr/metallb-frr
 ```
-You will be prompted for a IP prefix, which will be the default Adresspool for Metallb. Just input any random prefix, we wont be using it. Now Metallb should be successfully installed. Until we can use this though, we first have to set up our router correctly.
+You will be prompted for an IP prefix, which will be the default Addresspool for Metallb. Just input any random prefix, we wont be using it. Now Metallb should be successfully installed. Until we can use this though, we first have to set up our router correctly.
 
 ⚠️ There is currently a bug in metallb which sometimes messes up the cert configuration for the webhooks metallb provides so that kubernetes can validate the custom resources. The issue is documented [here](https://github.com/metallb/metallb/issues/1597). If this applies to you, i would recommend setting `failurePolicy=Ignore` like it is suggested there in your metallb deployment. This requires modifying the microk8s addon.
 
 ## Setting up our VyOS router
 (Skip this part if you already have a BGP enabled router in your network and know how to configure it)
 
-As every configuration is different, i will only go into detail on how to setup the peerings to the kubernetes nodes. At the end of this post, all prefixes anounced from kubernetes will be in the routing table of this VyOS router, but you still have to redistribute them to your ISP.
+As every configuration is different, i will only go into detail on how to setup the peerings to the kubernetes nodes. At the end of this post, all prefixes announced from kubernetes will be in the routing table of this VyOS router, but you still have to redistribute them to your ISP.
 
 At this point, you should have a vyos router up and running which is in the same network as your nodes.
 
@@ -241,7 +245,7 @@ To configure MetalLB, we essentially need three things:
 
 1. An Adresspool
 2. A BGPPeer
-3. An Anouncement
+3. An announcement
 
 #### The Adress Space
 First we need to configure an adresspool from which MetalLB will hand out adresses. We do this by defining a resource for the CRD `IPAddressPool`:
@@ -283,7 +287,7 @@ Once again, adjust the ASN and the address of your router and apply it with
 kubectl apply -f peer.yaml
 ```
 #### The advertisement
-Metallb wont anounce any prefixes until you have defined a `BGPAdvertisement` resource. We dont need to actually configure anything in it, so you can leave it as is.
+Metallb wont announce any prefixes until you have defined a `BGPAdvertisement` resource. We dont need to actually configure anything in it, so you can leave it as is.
 
 `advertisement.yaml`
 ```yaml
@@ -368,16 +372,15 @@ nginx   LoadBalancer   fd98::1163   2a0e:8f02:f000:2::   80:30544/TCP   25s
 ```
 If your BGP configuration is setup probably, the address under `EXTERNAL-IP `should be publicly reachable. Lets check:
 
-![](images/screenshot.png)
-
+![nginx screenshot](images/6CA4F3E7-2B94-4070-931E-5233861B7B56_1_105_c.jpeg)
 Yay \o/ seems like its working.
 
 ## Continuing from here
-We now have a working kubernetes cluster in which we can deploy our workloads. One part is however still missing: Storage. For this i would recommend to install longhorn, which provides everythin necessary for your kubernetes cluster storage-wise.
+We now have a working kubernetes cluster in which we can deploy our workloads. One part is however still missing: Storage. For this i would recommend to install longhorn, which provides everythin necessary for your kubernetes cluster storage-wise. I will probably make another post covering this.
 ### Troubleshooting
 If your service isnt reachable, try to narrow down the source:
-#### Is the address getting anounced to your router?
-First, check if the anuoncement is actually made from the metallb-`speaker` components. In the case of VyOS, you can check the received anouncements with
+#### Is the address getting announced to your router?
+First, check if the anuoncement is actually made from the metallb-`speaker` components. In the case of VyOS, you can check the received announcements with
 ```
 show bgp summary
 ```
