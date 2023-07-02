@@ -27,8 +27,7 @@ jobs:
         with:
           name: output
           path: output/
-      - uses: actions/configure-pages@v1
-      - uses: actions/upload-pages-artifact@v1
+      - uses: actions/upload-pages-artifact
         with:
           path: ./output
   deploy:
@@ -47,4 +46,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2 
+        uses: actions/deploy-pages
