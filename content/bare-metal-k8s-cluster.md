@@ -57,6 +57,16 @@ microk8s status --wait-ready
 ```
 Now, decide on one of the nodes to be the master node, which will host the control plane. As microk8s doesnt support IPv6 out of the box, we will have to adjust some things on this node, which will later get propagated to the other nodes.
 
+To be able to use the standard `kubectl`, you will have to dump the microk8s kubeconf to the appropriate path:
+```
+microk8s config > ~/.kube/config
+```
+And install kubectl
+```
+sudo snap install kubectl --classic
+```
+Alternatively, you can also preface every `kubectl` command with `microk8s kubectl` to use the "built-in" `kubectl`.
+
 #### Enabling IPv6 on the cluster-internal ip spaces
 You only need to execute these commands on your master node.
 ```bash
