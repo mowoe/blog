@@ -89,10 +89,12 @@ EOF
 ```
 ```bash
 sudo patch /var/snap/microk8s/current/args/kube-controller-manager << EOF
-7a8,11
-> --service-cluster-ip-range=10.152.183.0/24,fd98::/108
-> --cluster-cidr=10.1.0.0/16,fd01::/64
-> 
+@@ -7,3 +7,5 @@
+ --leader-elect-lease-duration=60s
+ --leader-elect-renew-deadline=30s
+ --profiling=false
++--service-cluster-ip-range=10.152.183.0/24,fd98::/108
++--cluster-cidr=10.1.0.0/16,fd01::/64
 EOF
 ```
 #### Enabling IPv6 for calico
