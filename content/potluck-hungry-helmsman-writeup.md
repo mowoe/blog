@@ -18,17 +18,17 @@ So after we retrieved this kubeconfig, lets take a look at what we can do with i
 
 ```bash
 ~/D/congress_ctf> kubectl --kubeconfig kubeconfig get all -A
-NAMESPACE NAME READY STATUS RESTARTS AGE
-flag-sender pod/flag-sender-676776d678-9wjgr 1/1 Running 0 43s
+NAMESPACE   NAME                             READY STATUS  RESTARTS AGE
+flag-sender pod/flag-sender-676776d678-9wjgr 1/1   Running 0        43s
 ...
 
-NAMESPACE NAME READY UP-TO-DATE AVAILABLE AGE
-flag-sender deployment.apps/flag-sender 1/1 1 1 54s
-kube-system deployment.apps/calico-kube-controllers 1/1 1 1 55s
+NAMESPACE   NAME                                    READY UP-TO-DATE  AVAILABLE AGE
+flag-sender deployment.apps/flag-sender             1/1   1           1         54s
+kube-system deployment.apps/calico-kube-controllers 1/1   1           1         55s
 
-NAMESPACE NAME DESIRED CURRENT READY AGE
-flag-sender replicaset.apps/flag-sender-676776d678 1 1 1 43s
-kube-system replicaset.apps/calico-kube-controllers-7ddc4f45bc 1 1 1 43s
+NAMESPACE   NAME                                                DESIRED CURRENT READY AGE
+flag-sender replicaset.apps/flag-sender-676776d678              1       1       1     43s
+kube-system replicaset.apps/calico-kube-controllers-7ddc4f45bc  1       1       1     43s
 ```
 
 So right of the bat, we see some interesting stuff. We have a deployment together with a pod with the name `flag-sender`. This seems interesting. Lets inspect the pod:
